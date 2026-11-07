@@ -1,0 +1,8 @@
+{
+  "name": "miyagi",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Miyagi: tu sensei de físico y nutrición.",
+  "engines": { "node": ">=20" }
+}
