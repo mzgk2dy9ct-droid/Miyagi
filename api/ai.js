@@ -123,13 +123,19 @@ async function gemini(res, { messages, tools, system, maxTokens, tier, key, src 
   const chain = [...new Set([model, GEMINI_MODEL, GEMINI_QUICK_MODEL, "gemini-3.5-flash", "gemini-3.5-flash-lite"])];
   let best = null; // el primer fallo "de verdad" (cuota, saturado), para no enseñar un 404 del último intento
   let url, r, data;
+  const t0 = Date.now();
   for (let i = 0; i < chain.length; i++) {
+    if (i > 0 && Date.now() - t0 > 40000) break; // sin tiempo para otro intento (Vercel corta a los 60 s)
     url = `https://generativelanguage.googleapis.com/v1beta/models/${chain[i]}:generateContent`;
     // Pensar poco = responder rápido. Los 2.5 usan thinkingBudget; los nuevos, thinkingLevel.
     const think = /2\.5/.test(chain[i]) ? { thinkingBudget: /lite/.test(chain[i]) ? 0 : 512 } : { thinkingLevel: "low" };
-    const send = (tc) => fetch(url, { method: "POST", headers: { "x-goog-api-key": key, "content-type": "application/json" },
+    const send = (tc) => fetch(url, { method: "POST", signal: AbortSignal.timeout(Math.max(8000, 52000 - (Date.now() - t0))), headers: { "x-goog-api-key": key, "content-type": "application/json" },
       body: JSON.stringify({ ...body, generationConfig: { ...body.generationConfig, ...(tc ? { thinkingConfig: tc } : {}) } }) });
-    r = await send(think);
+    try { r = await send(think); } catch (e) {
+      r = { ok: false, status: 503 }; data = { error: { message: "high demand (timeout " + chain[i] + ")" } };
+      if (!best) best = { r, data };
+      continue;
+    }
     data = await r.json().catch(() => ({}));
     if (r.status === 400 && /think/i.test(data?.error?.message || "")) { r = await send(null); data = await r.json().catch(() => ({})); }
     if (r.ok || ![429, 500, 503, 404].includes(r.status)) break;
