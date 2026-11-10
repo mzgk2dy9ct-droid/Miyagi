@@ -116,7 +116,7 @@ async function gemini(res, { messages, tools, system, maxTokens, tier }) {
   if (!r.ok) {
     const msg = data?.error?.message || "Gemini no ha respondido.";
     console.error("Gemini", r.status, msg);
-    const code = r.status === 429 ? "rate_limited" : (r.status === 401 || r.status === 403 || /API key/i.test(msg)) ? "no_key" : "unavailable";
+    const code = r.status === 429 ? "rate_limited" : (r.status === 401 || r.status === 403 || /API key/i.test(msg)) ? "bad_key" : "unavailable";
     return res.status(r.status === 429 ? 429 : 502).json({ error: msg, code });
   }
   if (!data?.candidates?.length) {
