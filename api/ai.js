@@ -9,6 +9,8 @@ export const QUICK_MODEL = "claude-haiku-5-5";
 export const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
 export const GEMINI_QUICK_MODEL = process.env.GEMINI_QUICK_MODEL || "gemini-flash-lite-latest";
 
+const KEY_CACHE = { key: null, t: 0 };
+
 // POST /api/ai { messages, tools?, system?, max_tokens?, tier? }
 // Las herramientas se ejecutan en el móvil: aquí solo se hace de puente.
 export default async function handler(req, res) {
@@ -22,7 +24,8 @@ export default async function handler(req, res) {
     let gkey = null, src = "Supabase", why = "";
     try {
       if (!supabaseReady()) why = "faltan SUPABASE_URL o SUPABASE_SECRET_KEY";
-      else { const d = await getDoc("_config", "gemini"); gkey = d && d.key ? d.key : null; if (!gkey) why = "no hay fila _config/gemini en " + String(process.env.SUPABASE_URL).replace(/^https?:\/\//, "").split(".")[0]; }
+      else if (KEY_CACHE.key && Date.now() - KEY_CACHE.t < 300000) gkey = KEY_CACHE.key;
+      else { const d = await getDoc("_config", "gemini"); if (d && d.key) Object.assign(KEY_CACHE, { key: d.key, t: Date.now() }); gkey = d && d.key ? d.key : null; if (!gkey) why = "no hay fila _config/gemini en " + String(process.env.SUPABASE_URL).replace(/^https?:\/\//, "").split(".")[0]; }
     } catch (e) { why = String(e.message || e).slice(0, 160); console.error("config", e); }
     if (!gkey && process.env.GEMINI_API_KEY) { gkey = process.env.GEMINI_API_KEY; src = "Vercel (Supabase: " + why + ")"; }
     // Limpia lo que se cuela al copiar y pegar: espacios, saltos de línea, comillas.
@@ -121,8 +124,13 @@ async function gemini(res, { messages, tools, system, maxTokens, tier, key, src 
   let url, r, data;
   for (let i = 0; i < chain.length; i++) {
     url = `https://generativelanguage.googleapis.com/v1beta/models/${chain[i]}:generateContent`;
-    r = await fetch(url, { method: "POST", headers: { "x-goog-api-key": key, "content-type": "application/json" }, body: JSON.stringify(body) });
+    // Pensar poco = responder rápido. Los 2.5 usan thinkingBudget; los nuevos, thinkingLevel.
+    const think = /2\.5/.test(chain[i]) ? { thinkingBudget: /lite/.test(chain[i]) ? 0 : 512 } : { thinkingLevel: "low" };
+    const send = (tc) => fetch(url, { method: "POST", headers: { "x-goog-api-key": key, "content-type": "application/json" },
+      body: JSON.stringify({ ...body, generationConfig: { ...body.generationConfig, ...(tc ? { thinkingConfig: tc } : {}) } }) });
+    r = await send(think);
     data = await r.json().catch(() => ({}));
+    if (r.status === 400 && /think/i.test(data?.error?.message || "")) { r = await send(null); data = await r.json().catch(() => ({})); }
     if (r.ok || ![429, 500, 503, 404].includes(r.status)) break;
     console.error("Gemini", chain[i], r.status, data?.error?.message);
     if (i < chain.length - 1) await new Promise((ok) => setTimeout(ok, 600));
