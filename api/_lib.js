@@ -50,8 +50,15 @@ function sbHeaders(extra = {}) {
   if (!key.startsWith("sb_")) h.Authorization = `Bearer ${key}`; // claves antiguas (JWT)
   return h;
 }
+// Se queda solo con "https://xxxx.supabase.co" aunque en Vercel se pegara la URL con /rest/v1 u otra ruta.
+function sbBase() {
+  const raw = String(process.env.SUPABASE_URL || "").trim();
+  const ref = raw.match(/\/project\/([a-z0-9]{20})/); // se pegó el enlace del panel de Supabase
+  if (ref) return `https://${ref[1]}.supabase.co`;
+  try { return new URL(raw).origin; } catch (e) { return raw.replace(/\/+$/, ""); }
+}
 function sbUrl(path) {
-  return `${String(process.env.SUPABASE_URL || "").replace(/\/+$/, "")}/rest/v1/${path}`;
+  return `${sbBase()}/rest/v1/${path}`;
 }
 export function supabaseReady() {
   return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SECRET_KEY);
