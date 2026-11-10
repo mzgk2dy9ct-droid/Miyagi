@@ -23,7 +23,7 @@
       throw { code: "not_granted", message: "Sesión caducada" };
     }
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw { code: j.code || (r.status === 429 ? "rate_limited" : "unavailable"), message: j.error || "Error", status: r.status };
+    if (!r.ok) throw { code: j.code || (r.status === 413 ? "too_big" : r.status === 504 ? "timeout" : r.status === 429 ? "rate_limited" : "unavailable"), message: j.error || "Error " + r.status, status: r.status };
     return j;
   }
   window.miyagiApi = api;
@@ -163,24 +163,38 @@
   window.miyagiDB = { col: (c) => [...map(c).entries()], write, flush, pull };
 
   /* ---------- Claude (a través de /api/ai) ---------- */
-  async function toImageBlock(blob) {
-    let out = blob;
+  // Toda foto sale como JPEG de 1280 px como mucho: así nunca pasa del límite de Vercel (4,5 MB)
+  // ni llega en un formato que Claude no lee (HEIC del iPhone).
+  async function decode(blob) {
+    try { return await createImageBitmap(blob, { imageOrientation: "from-image" }); } catch (e) {}
+    const url = URL.createObjectURL(blob);
+    try { const img = new Image(); await new Promise((r, j) => { img.onload = r; img.onerror = j; img.src = url; }); return img; }
+    finally { setTimeout(() => URL.revokeObjectURL(url), 1000); }
+  }
+  async function toImageBlock(blob, budget = 700_000) {
+    let out = null;
     try {
-      const bmp = await createImageBitmap(blob);
-      const s = Math.min(1, 1568 / Math.max(bmp.width, bmp.height));
-      const c = document.createElement("canvas"); c.width = Math.round(bmp.width * s); c.height = Math.round(bmp.height * s);
-      c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
-      out = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.82));
-    } catch (e) {}
+      const im = await decode(blob);
+      const w = im.naturalWidth || im.width, h = im.naturalHeight || im.height;
+      for (const [max, q] of [[1280, 0.8], [1024, 0.72], [800, 0.65]]) {
+        const s = Math.min(1, max / Math.max(w, h));
+        const c = document.createElement("canvas"); c.width = Math.round(w * s); c.height = Math.round(h * s);
+        c.getContext("2d").drawImage(im, 0, 0, c.width, c.height);
+        out = await new Promise((r) => c.toBlob(r, "image/jpeg", q));
+        if (out && out.size < budget) break;
+      }
+    } catch (e) { out = null; }
+    if (!out) throw { code: "bad_image", message: "No he podido leer esa foto. Prueba con otra o hazle una captura de pantalla." };
     const b64 = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split(",")[1]); fr.readAsDataURL(out); });
-    return { type: "image", source: { type: "base64", media_type: out.type || "image/jpeg", data: b64 } };
+    return { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } };
   }
   async function sample(input, opts = {}) {
     let messages = typeof input === "string" ? [{ role: "user", content: input }] : input.map((m) => ({ role: m.role, content: m.content }));
     const imgs = opts.images ? [...(opts.images instanceof Blob ? [opts.images] : opts.images)].slice(0, 6) : [];
     if (imgs.length) {
       const last = messages[messages.length - 1];
-      const blocks = await Promise.all(imgs.map(toImageBlock));
+      const budget = Math.min(700_000, Math.floor(2_400_000 / imgs.length));
+      const blocks = await Promise.all(imgs.map((b) => toImageBlock(b, budget)));
       last.content = [...blocks, { type: "text", text: typeof last.content === "string" ? last.content : "" }];
     }
     const tools = (opts.tools || []).map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema || { type: "object", properties: {} } }));
