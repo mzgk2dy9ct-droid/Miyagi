@@ -19,9 +19,12 @@ export default async function handler(req, res) {
   const maxTokens = Math.min(Number(max_tokens) || 4096, 16000);
   try {
     // La clave de Gemini puede estar en Supabase (fila _config/gemini) o en Vercel. Manda la de Supabase.
-    let gkey = null, src = "Supabase";
-    try { if (supabaseReady()) gkey = (await getDoc("_config", "gemini"))?.key || null; } catch (e) { console.error("config", e); }
-    if (!gkey && process.env.GEMINI_API_KEY) { gkey = process.env.GEMINI_API_KEY; src = "Vercel"; }
+    let gkey = null, src = "Supabase", why = "";
+    try {
+      if (!supabaseReady()) why = "faltan SUPABASE_URL o SUPABASE_SECRET_KEY";
+      else { const d = await getDoc("_config", "gemini"); gkey = d && d.key ? d.key : null; if (!gkey) why = "no hay fila _config/gemini en " + String(process.env.SUPABASE_URL).replace(/^https?:\/\//, "").split(".")[0]; }
+    } catch (e) { why = String(e.message || e).slice(0, 160); console.error("config", e); }
+    if (!gkey && process.env.GEMINI_API_KEY) { gkey = process.env.GEMINI_API_KEY; src = "Vercel (Supabase: " + why + ")"; }
     // Limpia lo que se cuela al copiar y pegar: espacios, saltos de línea, comillas.
     if (gkey) gkey = String(gkey).replace(/[\s'"`\u200B-\u200D\uFEFF]/g, "");
     if (gkey) return await gemini(res, { messages, tools, system, maxTokens, tier, key: gkey, src });
