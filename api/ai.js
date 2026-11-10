@@ -1,4 +1,4 @@
-import { requireAuth } from "./_lib.js";
+import { requireAuth, getDoc, supabaseReady } from "./_lib.js";
 
 // Miyagi puede pensar con dos cerebros:
 //  · GEMINI_API_KEY (gratis, de aistudio.google.com) → Gemini Flash. Si está puesta, se usa esta.
@@ -18,7 +18,11 @@ export default async function handler(req, res) {
   if (!Array.isArray(messages) || !messages.length) return res.status(400).json({ error: "Sin mensajes." });
   const maxTokens = Math.min(Number(max_tokens) || 4096, 16000);
   try {
-    if (process.env.GEMINI_API_KEY) return await gemini(res, { messages, tools, system, maxTokens, tier });
+    // La clave de Gemini puede estar en Supabase (fila _config/gemini) o en Vercel. Manda la de Supabase.
+    let gkey = null;
+    try { if (supabaseReady()) gkey = (await getDoc("_config", "gemini"))?.key || null; } catch (e) {}
+    gkey = gkey || process.env.GEMINI_API_KEY;
+    if (gkey) return await gemini(res, { messages, tools, system, maxTokens, tier, key: gkey });
     if (process.env.ANTHROPIC_API_KEY) return await claude(res, { messages, tools, system, maxTokens, tier });
     return res.status(503).json({ error: "Falta GEMINI_API_KEY (gratis) o ANTHROPIC_API_KEY en Vercel.", code: "no_key" });
   } catch (e) {
@@ -97,7 +101,7 @@ export function fromGemini(data) {
   return { content, stop_reason };
 }
 
-async function gemini(res, { messages, tools, system, maxTokens, tier }) {
+async function gemini(res, { messages, tools, system, maxTokens, tier, key }) {
   const model = tier === "quick" ? GEMINI_QUICK_MODEL : GEMINI_MODEL;
   const body = {
     contents: toGemini(messages),
@@ -109,7 +113,7 @@ async function gemini(res, { messages, tools, system, maxTokens, tier }) {
   };
   const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
     method: "POST",
-    headers: { "x-goog-api-key": process.env.GEMINI_API_KEY, "content-type": "application/json" },
+    headers: { "x-goog-api-key": String(key).trim(), "content-type": "application/json" },
     body: JSON.stringify(body),
   });
   const data = await r.json().catch(() => ({}));
