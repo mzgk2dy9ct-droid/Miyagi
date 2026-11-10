@@ -19,10 +19,12 @@ export default async function handler(req, res) {
   const maxTokens = Math.min(Number(max_tokens) || 4096, 16000);
   try {
     // La clave de Gemini puede estar en Supabase (fila _config/gemini) o en Vercel. Manda la de Supabase.
-    let gkey = null;
-    try { if (supabaseReady()) gkey = (await getDoc("_config", "gemini"))?.key || null; } catch (e) {}
-    gkey = gkey || process.env.GEMINI_API_KEY;
-    if (gkey) return await gemini(res, { messages, tools, system, maxTokens, tier, key: gkey });
+    let gkey = null, src = "Supabase";
+    try { if (supabaseReady()) gkey = (await getDoc("_config", "gemini"))?.key || null; } catch (e) { console.error("config", e); }
+    if (!gkey && process.env.GEMINI_API_KEY) { gkey = process.env.GEMINI_API_KEY; src = "Vercel"; }
+    // Limpia lo que se cuela al copiar y pegar: espacios, saltos de línea, comillas.
+    if (gkey) gkey = String(gkey).replace(/[\s'"`\u200B-\u200D\uFEFF]/g, "");
+    if (gkey) return await gemini(res, { messages, tools, system, maxTokens, tier, key: gkey, src });
     if (process.env.ANTHROPIC_API_KEY) return await claude(res, { messages, tools, system, maxTokens, tier });
     return res.status(503).json({ error: "Falta GEMINI_API_KEY (gratis) o ANTHROPIC_API_KEY en Vercel.", code: "no_key" });
   } catch (e) {
@@ -101,7 +103,7 @@ export function fromGemini(data) {
   return { content, stop_reason };
 }
 
-async function gemini(res, { messages, tools, system, maxTokens, tier, key }) {
+async function gemini(res, { messages, tools, system, maxTokens, tier, key, src }) {
   const model = tier === "quick" ? GEMINI_QUICK_MODEL : GEMINI_MODEL;
   const body = {
     contents: toGemini(messages),
@@ -111,14 +113,22 @@ async function gemini(res, { messages, tools, system, maxTokens, tier, key }) {
       ? { tools: [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description || "", parametersJsonSchema: t.input_schema || { type: "object", properties: {} } })) }] }
       : {}),
   };
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
-    method: "POST",
-    headers: { "x-goog-api-key": String(key).trim(), "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  const data = await r.json().catch(() => ({}));
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  let r = await fetch(url, { method: "POST", headers: { "x-goog-api-key": key, "content-type": "application/json" }, body: JSON.stringify(body) });
+  let data = await r.json().catch(() => ({}));
+  // Algunas claves nuevas (AQ.) solo funcionan como parámetro ?key= o como Bearer: se prueba antes de rendirse.
+  if (!r.ok && (r.status === 400 || r.status === 401 || r.status === 403)) {
+    for (const alt of [
+      () => fetch(url + "?key=" + encodeURIComponent(key), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
+      () => fetch(url, { method: "POST", headers: { Authorization: "Bearer " + key, "content-type": "application/json" }, body: JSON.stringify(body) }),
+    ]) {
+      const r2 = await alt(); const d2 = await r2.json().catch(() => ({}));
+      if (r2.ok) { r = r2; data = d2; break; }
+    }
+  }
   if (!r.ok) {
-    const msg = data?.error?.message || "Gemini no ha respondido.";
+    const hint = ` [clave de ${src}, ${key.length} caracteres, empieza por ${key.slice(0, 4)}]`;
+    const msg = (data?.error?.message || "Gemini no ha respondido.") + (r.status === 400 || r.status === 401 || r.status === 403 ? hint : "");
     console.error("Gemini", r.status, msg);
     const code = r.status === 429 ? "rate_limited" : (r.status === 401 || r.status === 403 || /API key/i.test(msg)) ? "bad_key" : "unavailable";
     return res.status(r.status === 429 ? 429 : 502).json({ error: msg, code });
