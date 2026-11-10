@@ -120,7 +120,8 @@ async function gemini(res, { messages, tools, system, maxTokens, tier, key, src 
       : {}),
   };
   // Si un modelo está saturado (503) o sin cuota (429), se prueba con el siguiente.
-  const chain = [...new Set([model, GEMINI_MODEL, GEMINI_QUICK_MODEL, "gemini-2.5-flash", "gemini-2.5-flash-lite"])];
+  const chain = [...new Set([model, GEMINI_MODEL, GEMINI_QUICK_MODEL, "gemini-3.5-flash", "gemini-3.5-flash-lite"])];
+  let best = null; // el primer fallo "de verdad" (cuota, saturado), para no enseñar un 404 del último intento
   let url, r, data;
   for (let i = 0; i < chain.length; i++) {
     url = `https://generativelanguage.googleapis.com/v1beta/models/${chain[i]}:generateContent`;
@@ -133,8 +134,10 @@ async function gemini(res, { messages, tools, system, maxTokens, tier, key, src 
     if (r.status === 400 && /think/i.test(data?.error?.message || "")) { r = await send(null); data = await r.json().catch(() => ({})); }
     if (r.ok || ![429, 500, 503, 404].includes(r.status)) break;
     console.error("Gemini", chain[i], r.status, data?.error?.message);
+    if (r.status !== 404 && !best) best = { r, data };
     if (i < chain.length - 1) await new Promise((ok) => setTimeout(ok, 600));
   }
+  if (!r.ok && r.status === 404 && best) ({ r, data } = best);
   // Algunas claves nuevas (AQ.) solo funcionan como parámetro ?key= o como Bearer: se prueba antes de rendirse.
   if (!r.ok && (r.status === 400 || r.status === 401 || r.status === 403)) {
     for (const alt of [
