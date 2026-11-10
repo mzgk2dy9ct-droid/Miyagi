@@ -35,7 +35,8 @@ App web pensada para el iPhone. No hay nada que instalar ni compilar: Vercel sir
 |---|---|
 | `SUPABASE_URL` | La misma que en Alfred. |
 | `SUPABASE_SECRET_KEY` | La misma que en Alfred. |
-| `ANTHROPIC_API_KEY` | La misma que en Alfred o Q Wardrobe (con saldo en console.anthropic.com). |
+| `GEMINI_API_KEY` | **Gratis.** Créala en aistudio.google.com → Get API key. Si está puesta, Miyagi usa Gemini. |
+| `ANTHROPIC_API_KEY` | (Opcional, de pago) La misma que en Alfred o Q Wardrobe (con saldo en console.anthropic.com). |
 | `APP_PASSWORD` | La contraseña para entrar en Miyagi. Puede ser distinta de la de Alfred. |
 | `CRON_SECRET` | Una palabra larga inventada (20 letras al azar). Solo sirve para los avisos. |
 

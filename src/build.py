@@ -23,7 +23,7 @@ app = r(app, '"Miyagi necesita permiso para usar Claude en esta página."', '"Tu
 app = r(app, '''  const c = e && e.code;
   if(c==="not_granted"''', '''  const c = e && e.code;
   if(!navigator.onLine) return "Sin conexión. Vuelve a probar cuando tengas internet.";
-  if(c==="no_key") return "La IA aún no está activada: falta la clave de Anthropic en Vercel.";
+  if(c==="no_key") return "La IA aún no está activada: falta la clave de Gemini (gratis) en Vercel.";
   if(c==="no_credit") return "No queda saldo en Anthropic. Recarga en console.anthropic.com y vuelve a probar.";
   if(c==="too_big") return "La foto pesa demasiado para enviarla. Prueba con una captura de pantalla de la foto.";
   if(c==="timeout") return "Miyagi ha tardado demasiado en mirar la foto. Vuelve a probar.";
