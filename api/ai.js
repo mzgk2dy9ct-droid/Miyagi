@@ -116,9 +116,17 @@ async function gemini(res, { messages, tools, system, maxTokens, tier, key, src 
       ? { tools: [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description || "", parametersJsonSchema: t.input_schema || { type: "object", properties: {} } })) }] }
       : {}),
   };
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-  let r = await fetch(url, { method: "POST", headers: { "x-goog-api-key": key, "content-type": "application/json" }, body: JSON.stringify(body) });
-  let data = await r.json().catch(() => ({}));
+  // Si un modelo está saturado (503) o sin cuota (429), se prueba con el siguiente.
+  const chain = [...new Set([model, GEMINI_MODEL, GEMINI_QUICK_MODEL, "gemini-2.5-flash", "gemini-2.5-flash-lite"])];
+  let url, r, data;
+  for (let i = 0; i < chain.length; i++) {
+    url = `https://generativelanguage.googleapis.com/v1beta/models/${chain[i]}:generateContent`;
+    r = await fetch(url, { method: "POST", headers: { "x-goog-api-key": key, "content-type": "application/json" }, body: JSON.stringify(body) });
+    data = await r.json().catch(() => ({}));
+    if (r.ok || ![429, 500, 503, 404].includes(r.status)) break;
+    console.error("Gemini", chain[i], r.status, data?.error?.message);
+    if (i < chain.length - 1) await new Promise((ok) => setTimeout(ok, 600));
+  }
   // Algunas claves nuevas (AQ.) solo funcionan como parámetro ?key= o como Bearer: se prueba antes de rendirse.
   if (!r.ok && (r.status === 400 || r.status === 401 || r.status === 403)) {
     for (const alt of [
@@ -131,7 +139,8 @@ async function gemini(res, { messages, tools, system, maxTokens, tier, key, src 
   }
   if (!r.ok) {
     const hint = ` [clave de ${src}, ${key.length} caracteres, empieza por ${key.slice(0, 4)}]`;
-    const msg = (data?.error?.message || "Gemini no ha respondido.") + (r.status === 400 || r.status === 401 || r.status === 403 ? hint : "");
+    const busy = r.status === 503 || /high demand|overloaded/i.test(data?.error?.message || "");
+    const msg = busy ? "Los servidores gratis de Google están saturados ahora mismo. Prueba en un par de minutos." : (data?.error?.message || "Gemini no ha respondido.") + (r.status === 400 || r.status === 401 || r.status === 403 ? hint : "");
     console.error("Gemini", r.status, msg);
     const code = r.status === 429 ? "rate_limited" : (r.status === 401 || r.status === 403 || /API key/i.test(msg)) ? "bad_key" : "unavailable";
     return res.status(r.status === 429 ? 429 : 502).json({ error: msg, code });
