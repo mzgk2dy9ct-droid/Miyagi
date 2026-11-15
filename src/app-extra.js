@@ -11,8 +11,10 @@
 
   const KINDS = [
     ["manana", "Buenos días con el plan del día", "9:00"],
+    ["peso", "Pésate, si no lo has hecho", "8:45"],
     ["supl", "Suplementos, si te faltan", "10:00"],
-    ["agua", "Agua, si vas corto", "17:30"],
+    ["comidas", "Apunta desayuno, comida y cena, si no lo has hecho", "11:00 · 16:00 · 22:30"],
+    ["agua", "Agua, si vas por detrás", "11:30 · 14:00 · 17:30 · 20:00"],
     ["gym", "Hoy toca gym", "19:00"],
     ["noche", "Proteína pendiente", "21:30"],
     ["domingo", "Tu semana en historias", "domingo 20:00"],
@@ -69,7 +71,21 @@
       const r = A.routine()[d.getDay()], dd = A.day(k), t = A.dayTotals(k), wg = A.waterGoal(d).g, ml = +dd.water || 0, PR = P.prot || 150;
       if (on("manana")) add(at(9, 0), `am_${k}`, "Buenos días", `${r.ex.length ? "Hoy toca " + r.name.toLowerCase() : r.note}. Objetivo: ${PR} g de proteína y ${A.fmtL(wg)} de agua.`);
       if (on("supl") && (P.supl || []).length) { const left = P.supl.filter((s) => !(dd.supl || {})[s]); if (left.length) add(at(10, 0), `supl_${k}`, "Suplementos", `No olvides: ${left.join(", ")}.`); }
-      if (on("agua") && (i > 0 || ml < wg * 0.5)) add(at(17, 30), `agua_${k}`, i === 0 ? `Llevas ${A.fmtL(ml)} de agua` : "¿Cómo vas de agua?", i === 0 ? `Te quedan ${A.fmtL(wg - ml)} para cerrar el anillo.` : `Hoy el objetivo son ${A.fmtL(wg)}.`);
+      // Agua: cuatro controles; solo avisa si vas por detrás de lo que tocaría a esa hora.
+      if (on("agua")) for (const [h, m, frac] of [[11, 30, 0.25], [14, 0, 0.45], [17, 30, 0.65], [20, 0, 0.85]]) {
+        if (i === 0 && ml >= wg * frac) continue;
+        add(at(h, m), `agua${h}_${k}`, ml > 0 && i === 0 ? `Llevas ${A.fmtL(ml)} de agua` : "💧 ¿Has bebido agua?",
+          i === 0 && ml > 0 ? `Deberías ir por ${A.fmtL(wg * frac)}. Bebe un vaso y apúntalo en Miyagi.` : `Bebe un vaso y apúntalo en Miyagi. Objetivo de hoy: ${A.fmtL(wg)}.`);
+      }
+      // Peso: por la mañana, en ayunas, si no te has pesado.
+      if (on("peso") && !(i === 0 && dd.weight)) add(at(8, 45), `peso_${k}`, "⚖️ Pésate", "En ayunas y después del baño. Apúntalo en Miyagi: con la media de 7 días vemos la tendencia real.");
+      // Comidas: si no hay nada apuntado en esa franja, recuerda apuntarla.
+      if (on("comidas")) {
+        const ms = dd.meals || [], has = (a, b) => ms.some((x) => { const hh = String(x.hora || ""); return hh >= a && hh < b; });
+        if (!(i === 0 && has("05:00", "11:00"))) add(at(11, 0), `des_${k}`, "🍳 ¿Qué has desayunado?", "Apúntalo en un momento: una foto o una frase y Miyagi calcula el resto.");
+        if (!(i === 0 && has("12:00", "16:00"))) add(at(16, 0), `com_${k}`, "🍽️ Apunta la comida", "Foto del plato o «he comido…» en Hoy. Si comiste en La Vella o el Ágora, dilo y lo busca.");
+        if (!(i === 0 && has("19:00", "24:00"))) add(at(22, 30), `cen_${k}`, "🌙 Apunta la cena", "Último registro del día. Así mañana el parte de Miyagi sale con datos reales.");
+      }
       if (on("gym") && r.ex.length && !dd.trained) add(at(19, 0), `gym_${k}`, `Hoy toca ${r.name.toLowerCase()}`, `A las 19:30, en el dojo. ${r.ex.slice(0, 3).map((x) => x[0]).join(", ")}…`);
       if (on("noche") && (i > 0 || t.p < PR)) add(at(21, 30), `noche_${k}`, i === 0 ? `Te faltan ${Math.round(PR - t.p)} g de proteína` : "¿Has cerrado la proteína?", "Cierra el anillo antes de dormir: yogur proteico, pechuga, atún o huevos.");
       if (on("domingo") && d.getDay() === 0) add(at(20, 0), `dom_${k}`, "Tu semana en el dojo está lista", "Abre Miyagi y mira tus historias.");
