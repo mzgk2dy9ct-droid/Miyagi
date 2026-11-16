@@ -1313,6 +1313,46 @@ nav.tabs button[aria-current="page"] .g{animation:stampin .4s cubic-bezier(.3,1.
     const b64 = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split(",")[1]); fr.readAsDataURL(out); });
     return { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } };
   }
+  // Pide a /api/ai la respuesta en directo (líneas JSON) y va pasando el texto según llega.
+  async function streamAi(payload, onPartial, signal) {
+    const ctrl = new AbortController();
+    const kill = setTimeout(() => ctrl.abort(), 62000);
+    if (signal) signal.addEventListener("abort", () => ctrl.abort(), { once: true });
+    let r;
+    try {
+      r = await fetch("/api/ai", { method: "POST", signal: ctrl.signal, body: JSON.stringify({ ...payload, stream: true }),
+        headers: { "Content-Type": "application/json", ...(TOKEN ? { Authorization: "Bearer " + TOKEN } : {}) } });
+    } catch (e) { clearTimeout(kill); throw { code: navigator.onLine ? "timeout" : "offline", message: "Sin respuesta" }; }
+    if (r.status === 401) { clearTimeout(kill); try { localStorage.removeItem(K.token); } catch (e) {} TOKEN = null; showLogin(); throw { code: "not_granted", message: "Sesión caducada" }; }
+    const ct = r.headers.get("content-type") || "";
+    if (!ct.includes("ndjson")) {
+      clearTimeout(kill);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw { code: j.code || (r.status === 413 ? "too_big" : r.status === 504 ? "timeout" : r.status === 429 ? "rate_limited" : "unavailable"), message: j.error || "Error " + r.status, status: r.status };
+      return j;
+    }
+    const reader = r.body.getReader(), dec = new TextDecoder();
+    let buf = "", txt = "", done = null;
+    try {
+      for (;;) {
+        const { value, done: end } = await reader.read();
+        if (end) break;
+        buf += dec.decode(value, { stream: true });
+        let k;
+        while ((k = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, k).trim(); buf = buf.slice(k + 1);
+          if (!line) continue;
+          let j; try { j = JSON.parse(line); } catch (e) { continue; }
+          if (j.d) { txt += j.d; onPartial(txt); }
+          else if (j.done) done = j.done;
+          else if (j.error) throw { code: j.code || "unavailable", message: j.error, text: txt || undefined };
+        }
+      }
+    } catch (e) { clearTimeout(kill); if (e && e.code) throw e; throw { code: "timeout", message: "Se ha cortado la respuesta", text: txt || undefined }; }
+    clearTimeout(kill);
+    if (!done) throw { code: "unavailable", message: "La respuesta llegó incompleta", text: txt || undefined };
+    return done;
+  }
   async function sample(input, opts = {}) {
     let messages = typeof input === "string" ? [{ role: "user", content: input }] : input.map((m) => ({ role: m.role, content: m.content }));
     const imgs = opts.images ? [...(opts.images instanceof Blob ? [opts.images] : opts.images)].slice(0, 6) : [];
@@ -1327,7 +1367,10 @@ nav.tabs button[aria-current="page"] .g{animation:stampin .4s cubic-bezier(.3,1.
     for (let round = 0; round < 14; round++) {
       if (opts.signal?.aborted) throw { code: "cancelled", text: all };
       let res;
-      try { res = await api("/api/ai", { method: "POST", body: JSON.stringify({ messages, tools, max_tokens: 4096, tier: opts.modelTier }) }); }
+      // Chat sin fotos → modelo rápido. Con onText → la respuesta llega en directo, trozo a trozo.
+      const tier = opts.modelTier || (opts.onText && !imgs.length ? "quick" : undefined);
+      try { res = opts.onText ? await streamAi({ messages, tools, max_tokens: 4096, tier }, (t) => { all = t; opts.onText({ text: all, delta: "" }); }, opts.signal)
+                              : await api("/api/ai", { method: "POST", body: JSON.stringify({ messages, tools, max_tokens: 4096, tier }) }); }
       catch (e) { throw { ...e, text: all || undefined }; }
       const content = res.content || [];
       const text = content.filter((c) => c.type === "text").map((c) => c.text).join("");
@@ -2135,7 +2178,42 @@ function makeTools(act){
       execute:i=>{ const t = String(i.hecho||"").trim().slice(0,160); if(!t) throw new Error("Vacío"); const items = state.docs.memory.items||[]; if(items.some(x=>x.t.toLowerCase()===t.toLowerCase())) return "ya lo sabía"; save("memory",{items:[...items, {id:uid(), t, at:T}].slice(-60)}); act("Recordado"); return "ok"; }}
   ];
 }
+/* Lo sencillo se apunta al instante, sin preguntar a la IA: agua, peso, cintura y entreno. */
+function quickLocal(q){
+  const s = q.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[!¡.]+$/,"").trim();
+  if(s.length > 70 || /\?|comid|comi|cen[eéa]|desayun|merend|y he|pero|porque|que tal|como /.test(s)) return null;
+  const W = {un:1,una:1,uno:1,medio:.5,media:.5,dos:2,tres:3,cuatro:4,cinco:5};
+  const n = x => x==null ? 1 : (W[x] ?? parseFloat(String(x).replace(",",".")));
+  let m;
+  // agua: "un vaso de agua", "2 vasos", "500 ml", "1,5 litros", "una botella de agua", "me he bebido medio litro"
+  if(/agua|vaso|botell|litro|\bml\b|bebid/.test(s) && (m = s.match(/(\d+(?:[.,]\d+)?|un|una|uno|medio|media|dos|tres|cuatro|cinco)?\s*(vasos?|botell\w*|litros?|l\b|ml\b|cl\b)/))){
+    const k = n(m[1]), u = m[2];
+    const ml = Math.round(/vaso/.test(u) ? k*250 : /botell/.test(u) ? k*500 : /^ml/.test(u) ? k : /^cl/.test(u) ? k*10 : k*1000);
+    if(ml>0 && ml<=3000) return {tool:"apuntar_agua", input:{ml}};
+  }
+  if((m = s.match(/(?:peso|pes[eo]|me he pesado|pesado)\D{0,12}(\d{2,3}(?:[.,]\d{1,2})?)/)) || (m = s.match(/^(\d{2,3}(?:[.,]\d{1,2})?)\s*kg$/))){
+    const kg = n(m[1]); if(kg>35 && kg<250) return {tool:"apuntar_cuerpo", input:{peso:kg}};
+  }
+  if((m = s.match(/cintura\D{0,10}(\d{2,3}(?:[.,]\d)?)/))){ const cm = n(m[1]); if(cm>40 && cm<200) return {tool:"apuntar_cuerpo", input:{cintura:cm}}; }
+  if(/^(ya )?(he )?(entrenado|ido al gym|ido al gimnasio|hecho (el |la )?(entreno|rutina|cinta|pierna|push|pull|torso))( hoy)?$|^entreno hecho$/.test(s)) return {tool:"marcar_entreno", input:{hecho:true}};
+  return null;
+}
 async function agent(q, ui){
+  const quick = quickLocal(q);
+  if(quick){
+    const acts = []; const act = txt => { acts.push(txt); const p = document.createElement("span"); p.className = "actpill"; p.textContent = "✓ "+txt; ui.acts.append(p); haptic(); };
+    const tool = makeTools(act).find(t=>t.name===quick.tool);
+    try{
+      tool.execute(quick.input);
+      const t = dayTotals(T), w = +day(T).water||0, wg = waterGoal().g;
+      const msg = quick.tool==="apuntar_agua" ? (w>=wg ? `Apuntado. Llevas ${fmtL(w)}: anillo del agua cerrado. Bien hecho.` : `Apuntado. Llevas ${fmtL(w)} de ${fmtL(wg)}. Te quedan ${fmtL(wg-w)}.`)
+        : quick.tool==="marcar_entreno" ? `Entreno marcado. Ahora a comer bien: llevas ${Math.round(t.p)} de ${P().prot} g de proteína.`
+        : quick.input.peso ? `Peso apuntado: ${quick.input.peso} kg. Lo que cuenta es la media de 7 días, no el número de hoy.` : `Cintura apuntada: ${quick.input.cintura} cm.`;
+      turns.push({role:"user",content:q},{role:"assistant",content:msg}); while(turns.length>16) turns.shift();
+      ui.bubble.textContent = msg; ui.status.textContent = ""; tock(); burst(innerWidth/2, innerHeight*.4, 14);
+      return msg;
+    }catch(e){ /* si algo no cuadra, que lo resuelva la IA */ }
+  }
   if(!sample){ ui.status.textContent = "Miyagi no responde ahora mismo. Revisa la conexión."; ui.bubble.textContent = ""; return null; }
   turns.push({role:"user",content:q}); while(turns.length>16) turns.shift(); while(turns.length && turns[0].role!=="user") turns.shift();
   const t = dayTotals(T);

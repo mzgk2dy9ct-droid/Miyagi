@@ -188,6 +188,46 @@
     const b64 = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(String(fr.result).split(",")[1]); fr.readAsDataURL(out); });
     return { type: "image", source: { type: "base64", media_type: "image/jpeg", data: b64 } };
   }
+  // Pide a /api/ai la respuesta en directo (líneas JSON) y va pasando el texto según llega.
+  async function streamAi(payload, onPartial, signal) {
+    const ctrl = new AbortController();
+    const kill = setTimeout(() => ctrl.abort(), 62000);
+    if (signal) signal.addEventListener("abort", () => ctrl.abort(), { once: true });
+    let r;
+    try {
+      r = await fetch("/api/ai", { method: "POST", signal: ctrl.signal, body: JSON.stringify({ ...payload, stream: true }),
+        headers: { "Content-Type": "application/json", ...(TOKEN ? { Authorization: "Bearer " + TOKEN } : {}) } });
+    } catch (e) { clearTimeout(kill); throw { code: navigator.onLine ? "timeout" : "offline", message: "Sin respuesta" }; }
+    if (r.status === 401) { clearTimeout(kill); try { localStorage.removeItem(K.token); } catch (e) {} TOKEN = null; showLogin(); throw { code: "not_granted", message: "Sesión caducada" }; }
+    const ct = r.headers.get("content-type") || "";
+    if (!ct.includes("ndjson")) {
+      clearTimeout(kill);
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw { code: j.code || (r.status === 413 ? "too_big" : r.status === 504 ? "timeout" : r.status === 429 ? "rate_limited" : "unavailable"), message: j.error || "Error " + r.status, status: r.status };
+      return j;
+    }
+    const reader = r.body.getReader(), dec = new TextDecoder();
+    let buf = "", txt = "", done = null;
+    try {
+      for (;;) {
+        const { value, done: end } = await reader.read();
+        if (end) break;
+        buf += dec.decode(value, { stream: true });
+        let k;
+        while ((k = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, k).trim(); buf = buf.slice(k + 1);
+          if (!line) continue;
+          let j; try { j = JSON.parse(line); } catch (e) { continue; }
+          if (j.d) { txt += j.d; onPartial(txt); }
+          else if (j.done) done = j.done;
+          else if (j.error) throw { code: j.code || "unavailable", message: j.error, text: txt || undefined };
+        }
+      }
+    } catch (e) { clearTimeout(kill); if (e && e.code) throw e; throw { code: "timeout", message: "Se ha cortado la respuesta", text: txt || undefined }; }
+    clearTimeout(kill);
+    if (!done) throw { code: "unavailable", message: "La respuesta llegó incompleta", text: txt || undefined };
+    return done;
+  }
   async function sample(input, opts = {}) {
     let messages = typeof input === "string" ? [{ role: "user", content: input }] : input.map((m) => ({ role: m.role, content: m.content }));
     const imgs = opts.images ? [...(opts.images instanceof Blob ? [opts.images] : opts.images)].slice(0, 6) : [];
@@ -202,7 +242,10 @@
     for (let round = 0; round < 14; round++) {
       if (opts.signal?.aborted) throw { code: "cancelled", text: all };
       let res;
-      try { res = await api("/api/ai", { method: "POST", body: JSON.stringify({ messages, tools, max_tokens: 4096, tier: opts.modelTier }) }); }
+      // Chat sin fotos → modelo rápido. Con onText → la respuesta llega en directo, trozo a trozo.
+      const tier = opts.modelTier || (opts.onText && !imgs.length ? "quick" : undefined);
+      try { res = opts.onText ? await streamAi({ messages, tools, max_tokens: 4096, tier }, (t) => { all = t; opts.onText({ text: all, delta: "" }); }, opts.signal)
+                              : await api("/api/ai", { method: "POST", body: JSON.stringify({ messages, tools, max_tokens: 4096, tier }) }); }
       catch (e) { throw { ...e, text: all || undefined }; }
       const content = res.content || [];
       const text = content.filter((c) => c.type === "text").map((c) => c.text).join("");

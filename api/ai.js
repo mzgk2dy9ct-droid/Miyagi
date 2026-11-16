@@ -16,7 +16,7 @@ const KEY_CACHE = { key: null, t: 0 };
 export default async function handler(req, res) {
   if (!requireAuth(req, res)) return;
   if (req.method !== "POST") return res.status(405).json({ error: "Método no permitido" });
-  const { messages, tools, system, max_tokens, tier } = req.body || {};
+  const { messages, tools, system, max_tokens, tier, stream } = req.body || {};
   if (!Array.isArray(messages) || !messages.length) return res.status(400).json({ error: "Sin mensajes." });
   const maxTokens = Math.min(Number(max_tokens) || 4096, 16000);
   try {
@@ -30,6 +30,7 @@ export default async function handler(req, res) {
     if (!gkey && process.env.GEMINI_API_KEY) { gkey = process.env.GEMINI_API_KEY; src = "Vercel (Supabase: " + why + ")"; }
     // Limpia lo que se cuela al copiar y pegar: espacios, saltos de línea, comillas.
     if (gkey) gkey = String(gkey).replace(/[\s'"`\u200B-\u200D\uFEFF]/g, "");
+    if (gkey && stream) return await geminiStream(res, { messages, tools, system, maxTokens, tier, key: gkey, src });
     if (gkey) return await gemini(res, { messages, tools, system, maxTokens, tier, key: gkey, src });
     if (process.env.ANTHROPIC_API_KEY) return await claude(res, { messages, tools, system, maxTokens, tier });
     return res.status(503).json({ error: "Falta GEMINI_API_KEY (gratis) o ANTHROPIC_API_KEY en Vercel.", code: "no_key" });
@@ -107,6 +108,109 @@ export function fromGemini(data) {
   content[0]._g = parts;
   const stop_reason = content.some((c) => c.type === "tool_use") ? "tool_use" : cand?.finishReason === "MAX_TOKENS" ? "max_tokens" : "end_turn";
   return { content, stop_reason };
+}
+
+/* ---------- Gemini en directo: el texto llega a trozos, como en ChatGPT ----------
+   Responde líneas JSON: {"d":"trozo"} … y al final {"done":{content,stop_reason}} o {"error","code"}.
+   Si un modelo no empieza a hablar en 12 s, o está saturado, se pasa al siguiente sin que se note. */
+function geminiBody({ messages, tools, system, maxTokens }) {
+  return {
+    contents: toGemini(messages),
+    generationConfig: { maxOutputTokens: maxTokens },
+    ...(system ? { systemInstruction: { parts: [{ text: typeof system === "string" ? system : JSON.stringify(system) }] } } : {}),
+    ...(Array.isArray(tools) && tools.length
+      ? { tools: [{ functionDeclarations: tools.map((t) => ({ name: t.name, description: t.description || "", parametersJsonSchema: t.input_schema || { type: "object", properties: {} } })) }] }
+      : {}),
+  };
+}
+const thinkFor = (m) => (/2\.5/.test(m) ? { thinkingBudget: /lite/.test(m) ? 0 : 512 } : { thinkingLevel: "low" });
+
+async function geminiStream(res, { messages, tools, system, maxTokens, tier, key, src }) {
+  const body = geminiBody({ messages, tools, system, maxTokens });
+  const model = tier === "quick" ? GEMINI_QUICK_MODEL : GEMINI_MODEL;
+  const chain = [...new Set([model, tier === "quick" ? GEMINI_MODEL : GEMINI_QUICK_MODEL, "gemini-3.5-flash-lite", "gemini-3.5-flash"])];
+  const t0 = Date.now();
+  let lastErr = null, started = false;
+  for (let i = 0; i < chain.length && Date.now() - t0 < 38000; i++) {
+    const ctrl = new AbortController();
+    let firstTimer = setTimeout(() => ctrl.abort(), 12000);
+    const hardTimer = setTimeout(() => ctrl.abort(), Math.max(5000, 55000 - (Date.now() - t0)));
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${chain[i]}:streamGenerateContent?alt=sse`;
+    const send = (tc) => fetch(url, { method: "POST", signal: ctrl.signal, headers: { "x-goog-api-key": key, "content-type": "application/json" },
+      body: JSON.stringify({ ...body, generationConfig: { ...body.generationConfig, ...(tc ? { thinkingConfig: tc } : {}) } }) });
+    try {
+      let r = await send(thinkFor(chain[i]));
+      if (r.status === 400) {
+        const d = await r.json().catch(() => ({}));
+        if (/think/i.test(d?.error?.message || "")) r = await send(null);
+        else { lastErr = { status: 400, msg: d?.error?.message }; clearTimeout(firstTimer); clearTimeout(hardTimer); break; }
+      }
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        clearTimeout(firstTimer); clearTimeout(hardTimer);
+        const e = { status: r.status, msg: d?.error?.message || "Gemini no ha respondido." };
+        console.error("Gemini stream", chain[i], r.status, e.msg);
+        if (r.status !== 404 || !lastErr) lastErr = e;
+        if ([429, 500, 503, 404].includes(r.status)) continue;
+        break;
+      }
+      // Lee el flujo SSE de Google
+      const reader = r.body.getReader(); const dec = new TextDecoder();
+      let buf = "", parts = [], finish = null, block = null;
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let k;
+        while ((k = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, k).trim(); buf = buf.slice(k + 1);
+          if (!line.startsWith("data:")) continue;
+          let j; try { j = JSON.parse(line.slice(5)); } catch (e) { continue; }
+          if (j.promptFeedback?.blockReason) block = j.promptFeedback.blockReason;
+          const c = j.candidates?.[0]; if (!c) continue;
+          if (c.finishReason) finish = c.finishReason;
+          for (const p of c.content?.parts || []) {
+            if (p.thought) { if (p.thoughtSignature) parts.push({ thoughtSignature: p.thoughtSignature, text: "" }); continue; }
+            parts.push(p);
+            if (p.text) {
+              if (!started) { started = true; clearTimeout(firstTimer); res.writeHead(200, { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" }); }
+              res.write(JSON.stringify({ d: p.text }) + "\n");
+            }
+          }
+          if (!started && parts.some((p) => p.functionCall)) { started = true; clearTimeout(firstTimer); res.writeHead(200, { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-cache, no-transform" }); }
+        }
+      }
+      clearTimeout(firstTimer); clearTimeout(hardTimer);
+      // Junta los trozos de texto seguidos en uno (con su firma), deja las llamadas a herramientas tal cual.
+      const merged = [];
+      for (const p of parts) {
+        const prev = merged[merged.length - 1];
+        if (!p.functionCall && prev && !prev.functionCall && typeof prev.text === "string") {
+          prev.text += p.text || ""; if (p.thoughtSignature) prev.thoughtSignature = p.thoughtSignature;
+        } else merged.push({ ...p });
+      }
+      const cleaned = merged.filter((p) => p.functionCall || p.text || p.thoughtSignature);
+      if (!started) {
+        if (block) return res.status(502).json({ error: "Gemini no ha querido mirar eso (" + block + ").", code: "unavailable" });
+        if (!cleaned.length) { lastErr = { status: 503, msg: "respuesta vacía de " + chain[i] }; continue; }
+        res.writeHead(200, { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-cache" });
+      }
+      const out = fromGemini({ candidates: [{ content: { parts: cleaned }, finishReason: finish }] });
+      res.end(JSON.stringify({ done: out }) + "\n");
+      return;
+    } catch (e) {
+      clearTimeout(firstTimer); clearTimeout(hardTimer);
+      if (started) { try { res.end(JSON.stringify({ error: "Se ha cortado la respuesta. Vuelve a probar.", code: "unavailable" }) + "\n"); } catch (_) {} return; }
+      console.error("Gemini stream", chain[i], "timeout/abort", e && e.name);
+      lastErr = lastErr || { status: 503, msg: "high demand (timeout " + chain[i] + ")" };
+      continue;
+    }
+  }
+  const st = lastErr?.status || 503, m = lastErr?.msg || "";
+  const busy = st === 503 || /high demand|overloaded/i.test(m);
+  const msg = busy ? "Los servidores gratis de Google están saturados ahora mismo. Prueba en un minuto." : m + (st === 400 || st === 401 || st === 403 ? ` [clave de ${src}, ${key.length} caracteres]` : "");
+  const code = st === 429 ? "rate_limited" : (st === 401 || st === 403 || /API key/i.test(m)) ? "bad_key" : "unavailable";
+  return res.status(st === 429 ? 429 : 502).json({ error: msg, code });
 }
 
 async function gemini(res, { messages, tools, system, maxTokens, tier, key, src }) {
