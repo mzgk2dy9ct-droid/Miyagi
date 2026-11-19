@@ -238,7 +238,7 @@
       last.content = [...blocks, { type: "text", text: typeof last.content === "string" ? last.content : "" }];
     }
     const tools = (opts.tools || []).map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema || { type: "object", properties: {} } }));
-    let all = "";
+    let all = "", via = null;
     for (let round = 0; round < 14; round++) {
       if (opts.signal?.aborted) throw { code: "cancelled", text: all };
       let res;
@@ -247,6 +247,7 @@
       try { res = opts.onText ? await streamAi({ messages, tools, max_tokens: 4096, tier }, (t) => { all = t; opts.onText({ text: all, delta: "" }); }, opts.signal)
                               : await api("/api/ai", { method: "POST", body: JSON.stringify({ messages, tools, max_tokens: 4096, tier }) }); }
       catch (e) { throw { ...e, text: all || undefined }; }
+      if (res && res.via) via = res.via;
       const content = res.content || [];
       const text = content.filter((c) => c.type === "text").map((c) => c.text).join("");
       if (text) { all = text; opts.onText && opts.onText({ text: all, delta: text }); }
@@ -263,9 +264,9 @@
         messages.push({ role: "user", content: results });
         continue;
       }
-      return { text: all, truncated: res.stop_reason === "max_tokens" };
+      return { text: all, truncated: res.stop_reason === "max_tokens", via };
     }
-    return { text: all, truncated: true };
+    return { text: all, truncated: true, via };
   }
   sample.json = async (input, opts) => {
     const { text } = await sample(input, opts);

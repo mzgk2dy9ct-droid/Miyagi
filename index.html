@@ -504,6 +504,8 @@ header .gear:active{transform:scale(.9)}
 .pg-seg{margin:4px 0 2px}
 .wrow{display:grid!important;grid-template-columns:1fr 1fr auto;gap:8px}
 .wrow button{white-space:nowrap;padding-left:8px;padding-right:8px}.wrow #wundo{min-width:44px;font-size:20px;line-height:1}
+
+.via{display:block;margin-top:6px;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;opacity:.55}
 </style>
 <style>
 #login{position:fixed;inset:0;z-index:300;display:grid;place-items:center;padding:24px;background-color:#f1e8d3;
@@ -1374,7 +1376,7 @@ header .gear:active{transform:scale(.9)}
       last.content = [...blocks, { type: "text", text: typeof last.content === "string" ? last.content : "" }];
     }
     const tools = (opts.tools || []).map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema || { type: "object", properties: {} } }));
-    let all = "";
+    let all = "", via = null;
     for (let round = 0; round < 14; round++) {
       if (opts.signal?.aborted) throw { code: "cancelled", text: all };
       let res;
@@ -1383,6 +1385,7 @@ header .gear:active{transform:scale(.9)}
       try { res = opts.onText ? await streamAi({ messages, tools, max_tokens: 4096, tier }, (t) => { all = t; opts.onText({ text: all, delta: "" }); }, opts.signal)
                               : await api("/api/ai", { method: "POST", body: JSON.stringify({ messages, tools, max_tokens: 4096, tier }) }); }
       catch (e) { throw { ...e, text: all || undefined }; }
+      if (res && res.via) via = res.via;
       const content = res.content || [];
       const text = content.filter((c) => c.type === "text").map((c) => c.text).join("");
       if (text) { all = text; opts.onText && opts.onText({ text: all, delta: text }); }
@@ -1399,9 +1402,9 @@ header .gear:active{transform:scale(.9)}
         messages.push({ role: "user", content: results });
         continue;
       }
-      return { text: all, truncated: res.stop_reason === "max_tokens" };
+      return { text: all, truncated: res.stop_reason === "max_tokens", via };
     }
-    return { text: all, truncated: true };
+    return { text: all, truncated: true, via };
   }
   sample.json = async (input, opts) => {
     const { text } = await sample(input, opts);
@@ -2297,8 +2300,10 @@ async function agent(q, ui){
   ui.status.textContent = "Miyagi está pensando…"; ui.status.classList.add("thinking");
   ui.bubble.innerHTML = '<div class="skel"><i></i><i style="width:70%"></i></div>';
   try{
-    const {text} = await sample([{role:"user",content:rules}, ...turns], opts);
+    const {text, via} = await sample([{role:"user",content:rules}, ...turns], opts);
     turns.push({role:"assistant",content:text}); ui.bubble.textContent = text;
+    ui.bubble.parentNode && ui.bubble.parentNode.querySelectorAll(":scope > .via").forEach(x=>x.remove());
+    if(via){ const v = document.createElement("small"); v.className = "via"; v.textContent = "vía " + via; ui.bubble.after(v); }
     if(actsDone.length){ tock(); burst(innerWidth/2, innerHeight*.4, 14); }
     return text;
   }catch(err){ ui.bubble.textContent = err.text || errCopy(err) || "…"; turns.pop(); return null; }

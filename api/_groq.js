@@ -58,7 +58,7 @@ export async function groqCall({ messages, tools, system, maxTokens, key, budget
       const r = await fetch("https://api.groq.com/openai/v1/chat/completions", { method: "POST", signal: AbortSignal.timeout(Math.max(6000, budgetMs - (Date.now() - t0))),
         headers: { Authorization: "Bearer " + key, "content-type": "application/json" }, body: JSON.stringify(body) });
       const data = await r.json().catch(() => ({}));
-      if (r.ok) return { status: 200, body: fromOpenAI(data), model };
+      if (r.ok) return { status: 200, body: { ...fromOpenAI(data), via: "Groq" }, model };
       const msg = data?.error?.message || "Groq " + r.status;
       console.error("Groq", model, r.status, msg);
       if (r.status === 401 || r.status === 403) return { status: 502, body: { error: "La clave de Groq no es válida.", code: "bad_key" } };

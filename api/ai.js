@@ -85,7 +85,7 @@ async function claude(res, { messages, tools, system, maxTokens, tier }) {
     const code = /credit balance/i.test(msg) ? "no_credit" : r.status === 401 ? "no_key" : r.status === 429 ? "rate_limited" : "unavailable";
     return res.status(r.status === 429 ? 429 : 502).json({ error: msg, code });
   }
-  res.status(200).json({ content: data.content, stop_reason: data.stop_reason });
+  res.status(200).json({ content: data.content, stop_reason: data.stop_reason, via: "Claude" });
 }
 
 /* ---------------- Gemini ---------------- */
@@ -220,7 +220,7 @@ async function geminiStream(res, { messages, tools, system, maxTokens, tier, key
         res.writeHead(200, { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-cache" });
       }
       const out = fromGemini({ candidates: [{ content: { parts: cleaned }, finishReason: finish }] });
-      res.end(JSON.stringify({ done: out }) + "\n");
+      res.end(JSON.stringify({ done: { ...out, via: "Gemini" } }) + "\n");
       return;
     } catch (e) {
       clearTimeout(firstTimer); clearTimeout(hardTimer);
@@ -295,7 +295,7 @@ async function gemini(res, { messages, tools, system, maxTokens, tier, key, src,
     const why = data?.promptFeedback?.blockReason;
     return res.status(502).json({ error: why ? "Gemini no ha querido mirar eso (" + why + ")." : "Gemini no ha respondido.", code: "unavailable" });
   }
-  res.status(200).json(fromGemini(data));
+  res.status(200).json({ ...fromGemini(data), via: "Gemini" });
 }
 
 export const config = { maxDuration: 60, api: { bodyParser: { sizeLimit: "4mb" } } };

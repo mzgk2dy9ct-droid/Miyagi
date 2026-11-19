@@ -471,6 +471,8 @@ header .gear:active{transform:scale(.9)}
 .pg-seg{margin:4px 0 2px}
 .wrow{display:grid!important;grid-template-columns:1fr 1fr auto;gap:8px}
 .wrow button{white-space:nowrap;padding-left:8px;padding-right:8px}.wrow #wundo{min-width:44px;font-size:20px;line-height:1}
+
+.via{display:block;margin-top:6px;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;opacity:.55}
 </style>
 
 <div class="beam" id="beam">
@@ -1931,8 +1933,10 @@ async function agent(q, ui){
   ui.status.textContent = "Miyagi está pensando…"; ui.status.classList.add("thinking");
   ui.bubble.innerHTML = '<div class="skel"><i></i><i style="width:70%"></i></div>';
   try{
-    const {text} = await sample([{role:"user",content:rules}, ...turns], opts);
+    const {text, via} = await sample([{role:"user",content:rules}, ...turns], opts);
     turns.push({role:"assistant",content:text}); ui.bubble.textContent = text;
+    ui.bubble.parentNode && ui.bubble.parentNode.querySelectorAll(":scope > .via").forEach(x=>x.remove());
+    if(via){ const v = document.createElement("small"); v.className = "via"; v.textContent = "vía " + via; ui.bubble.after(v); }
     if(actsDone.length){ tock(); burst(innerWidth/2, innerHeight*.4, 14); }
     return text;
   }catch(err){ ui.bubble.textContent = err.text || errCopy(err) || "…"; turns.pop(); return null; }
