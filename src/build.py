@@ -41,7 +41,8 @@ app = r(app, "if(RM || seen) return;", "if(RM || seen || window.miyagiNeedsLogin
 app = r(app, "lastSaveAt = Date.now(); apply(id, obj); render();", "lastSaveAt = Date.now(); apply(id, obj); render(); window.miyagiOnSave && window.miyagiOnSave();", 1)
 
 # --- exponer lo que necesita src/app-extra.js ---
-i = app.rindex("})();\n</script>")
+# (el script principal de la app; el pulido estilo Apple va en un script aparte al final)
+i = app.rindex("})();\n</script>", 0, app.index('<!-- ===== Pulido estilo Apple') if '<!-- ===== Pulido estilo Apple' in app else len(app))
 app = app[:i] + "window.miyagiApp = {P, day, saveProfile, routine, dayTotals, waterGoal, stamp, ymd, addDays, fmtL, render};\n" + app[i:]
 
 # --- separar cabecera, estilos, HTML y script ---

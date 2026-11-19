@@ -3307,6 +3307,7 @@ start();
 render();
 initDb().catch(()=>{});
 initSample().then(()=>{ render(); setTimeout(maybeNote, 1500); }).catch(()=>disableAI());
+window.miyagiApp = {P, day, saveProfile, routine, dayTotals, waterGoal, stamp, ymd, addDays, fmtL, render};
 })();
 </script>
 <!-- ===== Pulido estilo Apple: magnificación de la barra, iconos vivos, muelles, brillo y relieve ===== -->
@@ -3382,7 +3383,6 @@ initSample().then(()=>{ render(); setTimeout(maybeNote, 1500); }).catch(()=>disa
   document.addEventListener("pointerup", (e) => { if (e.pointerType !== "mouse") setTimeout(unlight, 350); }, { passive: true });
   document.addEventListener("pointercancel", unlight, { passive: true });
   document.addEventListener("scroll", () => { if (lit && !matchMedia("(hover:hover)").matches) unlight(); }, { passive: true });
-window.miyagiApp = {P, day, saveProfile, routine, dayTotals, waterGoal, stamp, ymd, addDays, fmtL, render};
 })();
 </script>
 
