@@ -1,4 +1,5 @@
 import { requireAuth, getDoc, supabaseReady } from "./_lib.js";
+import { groqCall } from "./_groq.js";
 
 // Miyagi puede pensar con dos cerebros:
 //  · GEMINI_API_KEY (gratis, de aistudio.google.com) → Gemini Flash. Si está puesta, se usa esta.
@@ -9,7 +10,7 @@ export const QUICK_MODEL = "claude-haiku-5-5";
 export const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-flash-latest";
 export const GEMINI_QUICK_MODEL = process.env.GEMINI_QUICK_MODEL || "gemini-flash-lite-latest";
 
-const KEY_CACHE = { key: null, t: 0 };
+const KEY_CACHE = { key: null, t: 0 }, GROQ_CACHE = { key: null, t: 0 };
 
 // POST /api/ai { messages, tools?, system?, max_tokens?, tier? }
 // Las herramientas se ejecutan en el móvil: aquí solo se hace de puente.
@@ -30,8 +31,31 @@ export default async function handler(req, res) {
     if (!gkey && process.env.GEMINI_API_KEY) { gkey = process.env.GEMINI_API_KEY; src = "Vercel (Supabase: " + why + ")"; }
     // Limpia lo que se cuela al copiar y pegar: espacios, saltos de línea, comillas.
     if (gkey) gkey = String(gkey).replace(/[\s'"`\u200B-\u200D\uFEFF]/g, "");
-    if (gkey && stream) return await geminiStream(res, { messages, tools, system, maxTokens, tier, key: gkey, src });
-    if (gkey) return await gemini(res, { messages, tools, system, maxTokens, tier, key: gkey, src });
+    // Segundo cerebro (Groq, gratis): fila _config/groq o GROQ_API_KEY. Entra si Gemini está saturado o sin cuota.
+    let qkey = process.env.GROQ_API_KEY || null;
+    if (!qkey && supabaseReady()) {
+      if (GROQ_CACHE.key && Date.now() - GROQ_CACHE.t < 300000) qkey = GROQ_CACHE.key;
+      else try { const d = await getDoc("_config", "groq"); qkey = d && d.key ? d.key : null; if (qkey) Object.assign(GROQ_CACHE, { key: qkey, t: Date.now() }); } catch (e) { console.error("config groq", e); }
+    }
+    if (qkey) qkey = String(qkey).replace(/[\s'"`\u200B-\u200D\uFEFF]/g, "");
+    const viaGroq = async (budgetMs) => { const g = await groqCall({ messages, tools, system, maxTokens, key: qkey, budgetMs });
+      if (stream && g.status === 200) { res.writeHead(200, { "Content-Type": "application/x-ndjson; charset=utf-8", "Cache-Control": "no-cache" }); const t = (g.body.content || []).filter((b) => b.type === "text").map((b) => b.text).join(""); if (t) res.write(JSON.stringify({ d: t }) + "\n"); return res.end(JSON.stringify({ done: g.body }) + "\n"); }
+      return res.status(g.status).json(g.body); };
+    if (gkey) {
+      const cap = { code: 200, body: null, headersSent: false, status(c) { this.code = c; return this; }, json(b) { this.body = b; return this; } };
+      if (stream) {
+        // En directo: si Gemini empieza a escribir, sigue él; si falla antes de empezar, contesta Groq.
+        const fail = await geminiStream(res, { messages, tools, system, maxTokens, tier, key: gkey, src, budgetMs: qkey ? 20000 : 38000, onFail: qkey ? (st, b) => ({ st, b }) : null });
+        if (!fail || !("st" in fail)) return;
+        const transient = fail.st === 429 || fail.st >= 500;
+        if (qkey && transient) return await viaGroq(30000);
+        return res.status(fail.st).json(fail.b);
+      }
+      await gemini(cap, { messages, tools, system, maxTokens, tier, key: gkey, src, budgetMs: qkey ? 20000 : 45000 });
+      const transient = cap.code === 429 || cap.code >= 500 || ["unavailable", "rate_limited"].includes(cap.body?.code);
+      if (cap.code === 200 || !qkey || !transient) return res.status(cap.code).json(cap.body);
+    }
+    if (qkey) return await viaGroq(gkey ? 35000 : 50000);
     if (process.env.ANTHROPIC_API_KEY) return await claude(res, { messages, tools, system, maxTokens, tier });
     return res.status(503).json({ error: "Falta GEMINI_API_KEY (gratis) o ANTHROPIC_API_KEY en Vercel.", code: "no_key" });
   } catch (e) {
@@ -125,16 +149,16 @@ function geminiBody({ messages, tools, system, maxTokens }) {
 }
 const thinkFor = (m) => (/2\.5/.test(m) ? { thinkingBudget: /lite/.test(m) ? 0 : 512 } : { thinkingLevel: "low" });
 
-async function geminiStream(res, { messages, tools, system, maxTokens, tier, key, src }) {
+async function geminiStream(res, { messages, tools, system, maxTokens, tier, key, src, budgetMs = 38000, onFail = null }) {
   const body = geminiBody({ messages, tools, system, maxTokens });
   const model = tier === "quick" ? GEMINI_QUICK_MODEL : GEMINI_MODEL;
   const chain = [...new Set([model, tier === "quick" ? GEMINI_MODEL : GEMINI_QUICK_MODEL, "gemini-3.5-flash-lite", "gemini-3.5-flash"])];
   const t0 = Date.now();
   let lastErr = null, started = false;
-  for (let i = 0; i < chain.length && Date.now() - t0 < 38000; i++) {
+  for (let i = 0; i < chain.length && Date.now() - t0 < budgetMs; i++) {
     const ctrl = new AbortController();
     let firstTimer = setTimeout(() => ctrl.abort(), 12000);
-    const hardTimer = setTimeout(() => ctrl.abort(), Math.max(5000, 55000 - (Date.now() - t0)));
+    const hardTimer = setTimeout(() => ctrl.abort(), Math.max(5000, (onFail ? budgetMs + 10000 : 55000) - (Date.now() - t0)));
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${chain[i]}:streamGenerateContent?alt=sse`;
     const send = (tc) => fetch(url, { method: "POST", signal: ctrl.signal, headers: { "x-goog-api-key": key, "content-type": "application/json" },
       body: JSON.stringify({ ...body, generationConfig: { ...body.generationConfig, ...(tc ? { thinkingConfig: tc } : {}) } }) });
@@ -210,10 +234,11 @@ async function geminiStream(res, { messages, tools, system, maxTokens, tier, key
   const busy = st === 503 || /high demand|overloaded/i.test(m);
   const msg = busy ? "Los servidores gratis de Google están saturados ahora mismo. Prueba en un minuto." : m + (st === 400 || st === 401 || st === 403 ? ` [clave de ${src}, ${key.length} caracteres]` : "");
   const code = st === 429 ? "rate_limited" : (st === 401 || st === 403 || /API key/i.test(m)) ? "bad_key" : "unavailable";
+  if (onFail) return onFail(st === 429 ? 429 : 502, { error: msg, code });
   return res.status(st === 429 ? 429 : 502).json({ error: msg, code });
 }
 
-async function gemini(res, { messages, tools, system, maxTokens, tier, key, src }) {
+async function gemini(res, { messages, tools, system, maxTokens, tier, key, src, budgetMs = 45000 }) {
   const model = tier === "quick" ? GEMINI_QUICK_MODEL : GEMINI_MODEL;
   const body = {
     contents: toGemini(messages),
@@ -229,11 +254,11 @@ async function gemini(res, { messages, tools, system, maxTokens, tier, key, src 
   let url, r, data;
   const t0 = Date.now();
   for (let i = 0; i < chain.length; i++) {
-    if (i > 0 && Date.now() - t0 > 40000) break; // sin tiempo para otro intento (Vercel corta a los 60 s)
+    if (i > 0 && Date.now() - t0 > budgetMs - 8000) break; // sin tiempo para otro intento (Vercel corta a los 60 s)
     url = `https://generativelanguage.googleapis.com/v1beta/models/${chain[i]}:generateContent`;
     // Pensar poco = responder rápido. Los 2.5 usan thinkingBudget; los nuevos, thinkingLevel.
     const think = /2\.5/.test(chain[i]) ? { thinkingBudget: /lite/.test(chain[i]) ? 0 : 512 } : { thinkingLevel: "low" };
-    const send = (tc) => fetch(url, { method: "POST", signal: AbortSignal.timeout(Math.max(8000, 52000 - (Date.now() - t0))), headers: { "x-goog-api-key": key, "content-type": "application/json" },
+    const send = (tc) => fetch(url, { method: "POST", signal: AbortSignal.timeout(Math.max(6000, Math.min(budgetMs * 0.6, budgetMs - (Date.now() - t0)))), headers: { "x-goog-api-key": key, "content-type": "application/json" },
       body: JSON.stringify({ ...body, generationConfig: { ...body.generationConfig, ...(tc ? { thinkingConfig: tc } : {}) } }) });
     try { r = await send(think); } catch (e) {
       r = { ok: false, status: 503 }; data = { error: { message: "high demand (timeout " + chain[i] + ")" } };
