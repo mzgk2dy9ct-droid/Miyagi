@@ -493,6 +493,12 @@ nav.tabs button[aria-current="page"] .g{animation:stampin .4s cubic-bezier(.3,1.
 @keyframes knot{from{transform:translateY(-40px);opacity:0}to{transform:none;opacity:1}}
 #ceremony button{margin-top:14px;background:#b3261e;border-color:#b3261e;color:#fbf3e4}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
+
+/* ---- Orden nuevo ---- */
+.cut{display:none!important}
+header .gear{margin-left:6px;background:none;border:0;color:inherit;opacity:.85;padding:8px;cursor:pointer;display:grid;place-items:center}
+header .gear:active{transform:scale(.9)}
+.sec-h{margin:18px 2px 0}
 </style>
 <style>
 #login{position:fixed;inset:0;z-index:300;display:grid;place-items:center;padding:24px;background-color:#f1e8d3;
@@ -1884,7 +1890,51 @@ function renderMiyagi(){
 }
 
 /* ---------- navegación ---------- */
-const VIEWS = ["hoy","comida","compra","gym","cuerpo","chat"];
+const VIEWS = ["hoy","comida","compra","gym","cuerpo","chat","ajustes"];
+/* ---- Orden: cinco pestañas con una misión cada una (calidad > cantidad) ----
+   Hoy (qué hago ahora) · Comida (+ compra) · Gym · Progreso · Miyagi (hablar con él) · Ajustes (engranaje). */
+(function reorg(){
+  const V = id => document.getElementById("v-"+id);
+  const blk = (view, t) => { const v = V(view); if(!v) return null; return [...v.children].find(c => { const h = c.querySelector("h2,h3"); return h && h.textContent.trim().startsWith(t); }) || null; };
+  const put = (el, view) => { if(el && V(view)) V(view).appendChild(el); };
+  const hide = el => { if(el){ el.hidden = true; el.classList.add("cut"); } };
+  // Ajustes: vista nueva tras el engranaje
+  const aj = document.createElement("section"); aj.className = "view stack"; aj.id = "v-ajustes"; aj.hidden = true;
+  aj.innerHTML = `<h1 class="ltitle">Ajustes</h1>`; V("chat").after(aj);
+  // Hoy: solo lo de ahora
+  put(blk("hoy","Modo"), "ajustes");
+  const exp = document.getElementById("exp-alert");
+  const racha = blk("hoy","Racha");
+  // Comida: apuntar + la compra (despensa y lista); fuera recetas y batch cooking
+  const cv = V("comida"), seg = V("compra").querySelector(".seg");
+  const ch = document.createElement("h2"); ch.className = "label sec-h"; ch.textContent = "Compra";
+  cv.appendChild(ch); if(exp) cv.appendChild(exp);
+  if(seg) cv.appendChild(seg);
+  ["cs-desp","cs-lista","cs-rec"].forEach(id => { const e = document.getElementById(id); if(e) cv.appendChild(e); });
+  hide(document.getElementById("cs-rec")); hide(document.getElementById("c-rec"));
+  const note = cv.querySelector(":scope > p.note"); if(note) cv.appendChild(note);
+  // Progreso (antes Cuerpo): todo lo que mide cómo vas
+  ["Calorías adaptativas","Objetivos y ajustes","Tus datos"].forEach(t => put(blk("cuerpo", t), "ajustes"));
+  put(racha, "cuerpo");
+  ["Calendario","Patrones","Resumen del domingo","Informe del mes"].forEach(t => put(blk("chat", t), "cuerpo"));
+  const ct = V("cuerpo").querySelector(".ltitle"); if(ct) ct.textContent = "Progreso";
+  // Miyagi: el chat primero y lo que sabe de ti
+  const chat = blk("chat","Habla con Miyagi"), t1 = V("chat").querySelector(".ltitle");
+  if(chat && t1) t1.after(chat);
+  // Fuera: respiración y los botones de hambre / energía
+  ["open-breath","btn-hambre","btn-energia"].forEach(id => hide(document.getElementById(id)));
+  // Barra: sin pestaña Compra; Cuerpo pasa a Progreso
+  const nb = document.querySelector('nav.tabs button[data-go="compra"]'); if(nb) nb.remove();
+  const pb = document.querySelector('nav.tabs button[data-go="cuerpo"]'); if(pb) pb.innerHTML = '<span class="g">進</span>Progreso';
+  const ni = document.querySelector("nav.tabs .in"); if(ni) ni.style.gridTemplateColumns = "repeat(5,1fr)";
+  // Engranaje en la cabecera → Ajustes
+  const hd = document.querySelector("header"); if(hd && !document.getElementById("gear")){
+    const g = document.createElement("button"); g.id = "gear"; g.className = "gear"; g.setAttribute("aria-label","Ajustes");
+    g.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>';
+    hd.appendChild(g);
+  }
+})();
+document.addEventListener("click", e => { if(e.target.closest("#gear")) go(curView==="ajustes" ? "hoy" : "ajustes"); });
 function go(v){
   const run = (anim)=>{
     VIEWS.forEach(x=>$("v-"+x).hidden = x!==v);
