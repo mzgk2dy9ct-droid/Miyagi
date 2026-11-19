@@ -626,6 +626,7 @@ nav.tabs button[aria-current="page"] .g{animation:stampin .4s cubic-bezier(.3,1.
     <div id="meals-today" style="margin-top:12px"></div>
     <div class="btns" style="margin-top:12px">
       <button id="open-log">Apuntar comida</button>
+      <button class="ghost" id="btn-scan">Escanear código</button>
       <button class="ghost" id="btn-hambre">Tengo mucha hambre</button>
       <button class="ghost" id="btn-energia">Voy sin energía</button>
     </div>
@@ -2545,6 +2546,7 @@ function openSheet(html, from, bind){
 }
 let lastFocus = null;
 function closeSheet(){
+  if(typeof stopScan==="function") stopScan();
   SW.classList.remove("in"); if(lastFocus && lastFocus.focus) try{ lastFocus.focus({preventScroll:true}); }catch(_){}
   setTimeout(()=>{ if(!SW.classList.contains("in")){ SW.hidden = true; SB.innerHTML = ""; SH.style.transform = ""; } }, 450);
 }
@@ -2603,6 +2605,56 @@ function logSheet(from){
   });
 }
 $("open-log").onclick = e => logSheet(e.currentTarget);
+/* ---- Escáner de códigos de barras (Open Food Facts) ---- */
+let scanner = null;
+function loadScanLib(){ if(window.Html5Qrcode) return Promise.resolve();
+  return new Promise((ok,ko)=>{ const sc=document.createElement("script"); sc.src="/vendor/html5-qrcode.min.js"; sc.onload=ok; sc.onerror=()=>ko(new Error("No he podido cargar el escáner")); document.head.appendChild(sc); }); }
+async function stopScan(){ try{ if(scanner){ await scanner.stop(); scanner.clear(); } }catch(_){} scanner=null; }
+async function offLookup(code){
+  const r = await fetch(`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(code)}.json?fields=product_name,product_name_es,brands,nutriments,serving_quantity,quantity`);
+  const j = await r.json().catch(()=>({}));
+  if(!r.ok || j.status!==1 || !j.product) return null;
+  const p=j.product, n=p.nutriments||{};
+  const kc = n["energy-kcal_100g"] ?? (n["energy_100g"]!=null ? n["energy_100g"]/4.184 : null);
+  if(kc==null) return null;
+  return { nombre:(p.product_name_es||p.product_name||"Producto")+(p.brands?" · "+String(p.brands).split(",")[0]:""), k:+kc||0, p:+n.proteins_100g||0, c:+n.carbohydrates_100g||0, f:+n.fat_100g||0, porcion:+p.serving_quantity||0, envase:p.quantity||"" };
+}
+function productSheet(code, info){
+  const g0 = info.porcion>0 ? Math.round(info.porcion) : 100;
+  openSheet(`<h2 class="sheet-t">${esc(info.nombre)}</h2><p class="small muted">Código ${esc(code)}${info.envase?" · "+esc(info.envase):""} · por 100 g: ${Math.round(info.k)} kcal, ${info.p.toFixed(1)} g proteína</p>
+    <label class="small">¿Cuántos gramos te vas a tomar?<input id="sc-g" type="number" inputmode="decimal" min="1" max="2000" value="${g0}"></label>
+    <p id="sc-sum" class="num" style="margin:10px 0"></p>
+    <div class="btns"><button id="sc-add">Apuntar</button><button class="ghost" id="sc-again">Escanear otro</button></div>`, null, root=>{
+      const g=root.querySelector("#sc-g"), sum=root.querySelector("#sc-sum");
+      const calc=()=>{ const f=(+g.value||0)/100; return {plato:info.nombre, gramos:+g.value||0, kcal:Math.round(info.k*f), proteina:Math.round(info.p*f*10)/10, carbohidratos:Math.round(info.c*f*10)/10, grasa:Math.round(info.f*f*10)/10}; };
+      const upd=()=>{ const m=calc(); sum.textContent=`${m.kcal} kcal · ${m.proteina} g proteína · ${m.carbohidratos} g carbos · ${m.grasa} g grasa`; };
+      g.oninput=upd; upd();
+      root.querySelector("#sc-add").onclick=()=>{ const m=calc(); if(!m.gramos) return; addMealObj(m); closeSheet(); stamp("食","Apuntado"); };
+      root.querySelector("#sc-again").onclick=()=>scanSheet();
+    });
+}
+async function handleCode(code){
+  await stopScan();
+  openSheet(`<p class="small muted">Buscando ${esc(code)}…</p>`);
+  let info=null; try{ info = await offLookup(code); }catch(_){}
+  if(!info){ openSheet(`<h2 class="sheet-t">No lo encuentro</h2><p class="small">El código ${esc(code)} no está en Open Food Facts o no tiene calorías. Hazle una foto a la etiqueta nutricional y apúntalo con «Apuntar comida».</p><div class="btns"><button id="sc-again">Escanear otro</button></div>`, null, r=>{ r.querySelector("#sc-again").onclick=()=>scanSheet(); }); return; }
+  productSheet(code, info);
+}
+async function scanSheet(from){
+  openSheet(`<h2 class="sheet-t">Escanear código</h2><div id="sc-cam" style="width:100%;min-height:240px;border-radius:12px;overflow:hidden;background:#000"></div>
+    <p class="small muted" style="margin-top:8px">Apunta al código de barras del envase. Si la cámara no va, escríbelo:</p>
+    <form id="sc-form" class="row" style="gap:8px"><input id="sc-code" inputmode="numeric" pattern="[0-9]*" placeholder="8480000…" style="flex:1"><button>Buscar</button></form>`, from, async root=>{
+      root.querySelector("#sc-form").onsubmit=e=>{ e.preventDefault(); const c=root.querySelector("#sc-code").value.replace(/\D/g,""); if(c.length>=8) handleCode(c); };
+      try{
+        await loadScanLib(); await stopScan();
+        const F=window.Html5QrcodeSupportedFormats||{};
+        scanner = new Html5Qrcode("sc-cam", { formatsToSupport:[F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E].filter(x=>x!=null), verbose:false });
+        await scanner.start({ facingMode:"environment" }, { fps:10, qrbox:(w,h)=>({ width:Math.min(300,w*0.9), height:Math.min(140,h*0.5) }) }, txt=>{ if(/^\d{8,14}$/.test(txt)){ haptic(); handleCode(txt); } }, ()=>{});
+      }catch(e){ const cam=root.querySelector("#sc-cam"); if(cam) cam.innerHTML=`<p class="small" style="color:#fff;padding:16px">No puedo abrir la cámara (${esc(e&&e.message||e)}). Escribe el número del código debajo.</p>`; }
+    });
+}
+$("btn-scan").onclick = e => scanSheet(e.currentTarget);
+
 function exSheet(n, from){
   const L = (state.docs.lifts.ex||{})[n]; const row = routine()[gymDay].ex.find(x=>x[0]===n);
   const isTime = row && /min/.test(String(row[1]));
