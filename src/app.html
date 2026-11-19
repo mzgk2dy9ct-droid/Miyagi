@@ -466,6 +466,11 @@ nav.tabs button[aria-current="page"] .g{animation:stampin .4s cubic-bezier(.3,1.
 header .gear{margin-left:6px;background:none;border:0;color:inherit;opacity:.85;padding:8px;cursor:pointer;display:grid;place-items:center}
 header .gear:active{transform:scale(.9)}
 .sec-h{margin:18px 2px 0}
+
+.pg-off{display:none!important}
+.pg-seg{margin:4px 0 2px}
+.wrow{display:grid!important;grid-template-columns:1fr 1fr auto;gap:8px}
+.wrow button{white-space:nowrap;padding-left:8px;padding-right:8px}.wrow #wundo{min-width:44px;font-size:20px;line-height:1}
 </style>
 
 <div class="beam" id="beam">
@@ -632,7 +637,7 @@ header .gear:active{transform:scale(.9)}
     <div id="meals-today" style="margin-top:12px"></div>
     <div class="btns" style="margin-top:12px">
       <button id="open-log">Apuntar comida</button>
-      <button class="ghost" id="btn-scan">Escanear código</button>
+      <button class="ghost" id="btn-scan">Escanear</button>
       <button class="ghost" id="btn-hambre">Tengo mucha hambre</button>
       <button class="ghost" id="btn-energia">Voy sin energía</button>
     </div>
@@ -652,8 +657,7 @@ header .gear:active{transform:scale(.9)}
       <div class="grow stack" style="gap:8px">
         <div><b class="num" id="water-txt" style="font-size:26px;font-family:var(--display)">0 l</b> <span class="muted" id="water-goal">de 2,5 l</span></div>
         <p class="small muted" id="water-note" style="margin:0"></p>
-        <div class="btns"><button id="w250">+ Vaso</button><button class="ghost" id="w500">+ Botella</button></div>
-        <button class="ghost small-btn" id="wundo" style="align-self:flex-start">Quitar un vaso</button>
+        <div class="btns wrow"><button id="w250">+ Vaso</button><button class="ghost" id="w500">+ Botella</button><button class="ghost" id="wundo" aria-label="Quitar un vaso">−</button></div>
       </div>
     </div>
   </div>
@@ -1383,7 +1387,8 @@ function renderHoy(){
 
   const supl = P().supl||[]; const taken = day(T).supl||{};
   $("supl-list").innerHTML = supl.length ? supl.map((s,i)=>`<label class="check ${taken[s]?"done":""}"><input type="checkbox" data-supl="${esc(s)}" ${taken[s]?"checked":""}><span>${esc(s)}</span></label>`).join("")
-    : `<p class="small muted" style="margin:0">No tienes suplementos apuntados. Añádelos en Cuerpo, en Objetivos y ajustes.</p>`;
+    : `<p class="small muted" style="margin:0">Añade tus suplementos en Ajustes (engranaje).</p>`;
+  if($("supl-panel")) $("supl-panel").hidden = !supl.length;
   const missed = supl.length ? countMissedSupl() : 0;
   if(missed) $("supl-list").innerHTML += `<p class="small muted" style="margin:6px 0 0">Esta semana se te han olvidado ${missed} tomas.</p>`;
 }
@@ -1552,6 +1557,21 @@ const VIEWS = ["hoy","comida","compra","gym","cuerpo","chat","ajustes"];
   put(racha, "cuerpo");
   ["Calendario","Patrones","Resumen del domingo","Informe del mes"].forEach(t => put(blk("chat", t), "cuerpo"));
   const ct = V("cuerpo").querySelector(".ltitle"); if(ct) ct.textContent = "Progreso";
+  // Selector Cuerpo · Constancia · Informes (una pantalla cada uno, como la app Fitness)
+  const G = { cuerpo:["Peso y cintura","Evolución","Fotos de progreso","Tú contra ti","Físico de referencia"], constancia:["Racha","Cinturones"], informes:["Patrones","Resumen del domingo","Informe del mes"] };
+  const cal = [...V("cuerpo").children].find(c => c.querySelector && c.querySelector("#cal-prev"));
+  Object.entries(G).forEach(([g, ts]) => ts.forEach(t => { const e = blk("cuerpo", t); if(e) e.dataset.pg = g; }));
+  if(cal) cal.dataset.pg = "constancia";
+  const order = ["cuerpo","constancia","informes"];
+  order.forEach(g => { (G[g]||[]).forEach(t => { const e = [...V("cuerpo").children].find(c => c.dataset && c.dataset.pg === g && (c.querySelector("h2,h3")||{}).textContent && c.querySelector("h2,h3").textContent.trim().startsWith(t)); if(e) V("cuerpo").appendChild(e); }); if(g === "constancia" && cal) V("cuerpo").appendChild(cal); });
+  const sg = document.createElement("div"); sg.className = "seg pg-seg"; sg.setAttribute("role","group"); sg.setAttribute("aria-label","Sección de progreso");
+  sg.innerHTML = `<button data-pgo="cuerpo">Cuerpo</button><button data-pgo="constancia">Constancia</button><button data-pgo="informes">Informes</button>`;
+  if(ct) ct.after(sg);
+  const pgShow = g => { [...V("cuerpo").children].forEach(c => { if(c.dataset && c.dataset.pg) c.classList.toggle("pg-off", c.dataset.pg !== g); });
+    sg.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b.dataset.pgo === g ? "true" : "false")); try{ localStorage.setItem("miyagi-pg", g); }catch(_){} };
+  sg.addEventListener("click", e => { const b = e.target.closest("[data-pgo]"); if(b){ pgShow(b.dataset.pgo); window.scrollTo({ top: 0, behavior: "smooth" }); } });
+  let pg0 = "cuerpo"; try{ pg0 = localStorage.getItem("miyagi-pg") || "cuerpo"; }catch(_){}
+  pgShow(order.includes(pg0) ? pg0 : "cuerpo");
   // Miyagi: el chat primero y lo que sabe de ti
   const chat = blk("chat","Habla con Miyagi"), t1 = V("chat").querySelector(".ltitle");
   if(chat && t1) t1.after(chat);
