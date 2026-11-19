@@ -2893,3 +2893,78 @@ initDb().catch(()=>{});
 initSample().then(()=>{ render(); setTimeout(maybeNote, 1500); }).catch(()=>disableAI());
 })();
 </script>
+<!-- ===== Pulido estilo Apple: magnificación de la barra, iconos vivos, muelles, brillo y relieve ===== -->
+<style id="apple-polish">
+@media (prefers-reduced-motion:no-preference){
+  /* 1. Barra de pestañas con magnificación (como el Dock del Mac) */
+  nav.tabs{touch-action:none}
+  nav.tabs button svg,nav.tabs button .g{transform-origin:50% 100%;transition:transform .32s cubic-bezier(.34,1.56,.64,1);will-change:transform}
+  nav.tabs.mag button svg,nav.tabs.mag button .g{transition:transform .09s ease-out}
+  /* 2. Iconos que reaccionan al tocarlos */
+  @keyframes ap-pop{0%{transform:scale(1)}30%{transform:scale(.78) rotate(-6deg)}62%{transform:scale(1.22) rotate(4deg)}82%{transform:scale(.95)}100%{transform:scale(1)}}
+  nav.tabs button .ap-pop{animation:ap-pop .55s cubic-bezier(.3,.7,.4,1)}
+  /* 3. Botones que se hunden y vuelven con muelle */
+  .btn,.iconbtn,.fab,.btns button,.bp-a button,.wr-a button,.rc .ra button{transition:transform .45s cubic-bezier(.34,1.56,.64,1),opacity .2s,filter .2s!important}
+  .btn:active,.iconbtn:active,.fab:active,.btns button:active,.bp-a button:active,.wr-a button:active,.rc .ra button:active{transform:scale(.94)!important;transition-duration:.07s!important;filter:brightness(.92)}
+  /* 4. Brillo que sigue al dedo o al ratón */
+  .panel{position:relative}
+  .panel::after{content:"";position:absolute;inset:0;border-radius:inherit;pointer-events:none;opacity:0;transition:opacity .45s ease;
+    background:radial-gradient(260px circle at var(--mx,50%) var(--my,50%),rgba(255,255,255,var(--shine,.09)),transparent 60%);mix-blend-mode:soft-light}
+  .panel.lit::after{opacity:1;transition-duration:.15s}
+  /* 5. Relieve 3D con ratón o trackpad (iPad/PC) */
+  .panel.tilt{transition:transform .5s cubic-bezier(.2,.8,.2,1)}
+}
+</style>
+<script>
+(() => {
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const nav = document.querySelector("nav.tabs"); if (!nav) return;
+  const icon = (b) => b.querySelector("svg, .g");
+  const btns = () => [...nav.querySelectorAll("button:not([hidden])")];
+  // 1. Magnificación: el icono bajo el dedo crece y los vecinos, menos (como una ola)
+  let scrub = false, startX = 0, last = null;
+  const wave = (x) => {
+    nav.classList.add("mag");
+    for (const b of btns()) {
+      const r = b.getBoundingClientRect(), d = Math.abs(x - (r.left + r.width / 2));
+      const k = Math.max(0, 1 - d / (r.width * 1.6));
+      const s = 1 + 0.42 * k * k;
+      const i = icon(b); if (i) i.style.transform = `translateY(${-9 * k * k}px) scale(${s})`;
+      if (k > 0.75) last = b;
+    }
+  };
+  const rest = () => { nav.classList.remove("mag"); for (const b of btns()) { const i = icon(b); if (i) i.style.transform = ""; } };
+  nav.addEventListener("pointermove", (e) => { if (e.pointerType === "mouse" || scrub) { if (scrub && Math.abs(e.clientX - startX) > 8) scrub = "moved"; wave(e.clientX); } });
+  nav.addEventListener("pointerdown", (e) => { if (e.pointerType !== "mouse") { scrub = true; startX = e.clientX; last = null; wave(e.clientX); } });
+  const end = (e) => {
+    // Deslizar el dedo por la barra y soltar abre esa pestaña (como en iOS)
+    if (scrub === "moved" && last) { const t = last; setTimeout(() => t.click(), 0); }
+    scrub = false; rest();
+  };
+  nav.addEventListener("pointerup", end); nav.addEventListener("pointercancel", end); nav.addEventListener("pointerleave", (e) => { if (e.pointerType === "mouse") rest(); });
+  // 2. El icono «salta» al tocarlo
+  nav.addEventListener("click", (e) => { const b = e.target.closest("button"); const i = b && icon(b); if (!i) return; i.classList.remove("ap-pop"); void i.getBoundingClientRect(); i.classList.add("ap-pop"); setTimeout(() => i.classList.remove("ap-pop"), 600); }, true);
+  // 4 y 5. Brillo que sigue al dedo y relieve 3D con ratón
+  let lit = null, raf = 0;
+  const light = (e) => {
+    const p = e.target.closest && e.target.closest(".panel"); if (!p) { if (lit) unlight(); return; }
+    if (lit && lit !== p) unlight();
+    lit = p;
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(() => {
+      const r = p.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+      p.style.setProperty("--mx", x + "px"); p.style.setProperty("--my", y + "px"); p.classList.add("lit");
+      if (e.pointerType === "mouse" && r.height < 520) {
+        const rx = ((y / r.height) - 0.5) * -3.2, ry = ((x / r.width) - 0.5) * 3.2;
+        p.classList.add("tilt"); p.style.transform = `perspective(900px) rotateX(${rx}deg) rotateY(${ry}deg)`;
+      }
+    });
+  };
+  const unlight = () => { if (!lit) return; lit.classList.remove("lit"); if (lit.classList.contains("tilt")) { lit.style.transform = ""; } lit = null; };
+  document.addEventListener("pointermove", light, { passive: true });
+  document.addEventListener("pointerdown", light, { passive: true });
+  document.addEventListener("pointerup", (e) => { if (e.pointerType !== "mouse") setTimeout(unlight, 350); }, { passive: true });
+  document.addEventListener("pointercancel", unlight, { passive: true });
+  document.addEventListener("scroll", () => { if (lit && !matchMedia("(hover:hover)").matches) unlight(); }, { passive: true });
+})();
+</script>
