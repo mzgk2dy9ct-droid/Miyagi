@@ -83,3 +83,11 @@ export async function getDoc(col, id) {
 export async function putDoc(col, id, data) {
   await sbUpsert([{ col, id, data, deleted: false, updated_at: new Date().toISOString() }]);
 }
+
+// Lee una fila de otra tabla del mismo proyecto (p. ej. la de Alfred, "docs").
+export async function getRow(table, col, id) {
+  const r = await fetch(sbUrl(`${table}?col=eq.${encodeURIComponent(col)}&id=eq.${encodeURIComponent(id)}&select=data,deleted`), { headers: sbHeaders() });
+  if (!r.ok) throw new Error(`Supabase ${r.status}: ${await r.text()}`);
+  const rows = await r.json();
+  return rows[0] && !rows[0].deleted ? rows[0].data : null;
+}

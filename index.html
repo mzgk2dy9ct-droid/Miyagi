@@ -2512,7 +2512,15 @@ $("open-breath").onclick = openBreath;
 document.addEventListener("keydown", e=>{ if(e.key!=="Escape") return; if(!$("story").hidden) closeStory(); if(!$("breath").hidden) stopBreath(false); });
 
 /* ================= INTELIGENCIA ================= */
-function memText(){ const m = (state.docs.memory && state.docs.memory.items) || []; return m.length ? " Lo que sabes del alumno: "+m.map(x=>x.t).join("; ")+"." : ""; }
+/* Memoria compartida con Alfred (su agenda): lo que sabe Alfred, su agenda de hoy y mañana y sus exámenes. */
+let SHARED = null;
+async function loadShared(){ if(!window.miyagiApi) return; try{ SHARED = await window.miyagiApi("/api/shared"); }catch(e){} }
+setTimeout(loadShared, 3000); setInterval(loadShared, 10*60e3);
+function sharedText(){ const a = SHARED && SHARED.alfred; if(!a) return "";
+  const ag = (a.agenda||[]).map(d=>`${d.dia} ${d.fecha}: ${d.eventos.join(", ")||"libre"}`).join(" | ");
+  const ex = (a.examenes||[]).map(x=>`${x.que} (${x.fecha})`).join(", ");
+  return ` AGENDA DE ALFRED (su app de agenda; úsala para adaptar comidas, entreno y descanso a su día, sin repetirla si no viene a cuento): ${ag||"sin datos"}.${ex?" Exámenes: "+ex+". Si hay un examen en 3 días o menos, prioriza dormir, comidas fáciles y entrenos que no agoten.":""}${(a.memoria||[]).length?" Lo que sabe Alfred de él: "+a.memoria.join("; ")+".":""}`; }
+function memText(){ const m = (state.docs.memory && state.docs.memory.items) || []; return (m.length ? " Lo que sabes del alumno: "+m.map(x=>x.t).join("; ")+"." : "") + sharedText(); }
 function pickFile(accept){
   return new Promise(res=>{ const i = document.createElement("input"); i.type = "file"; i.accept = accept; i.hidden = true;
     i.onchange = ()=>{ res(i.files[0]||null); i.remove(); }; document.body.append(i); i.click(); });
