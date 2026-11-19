@@ -25,6 +25,8 @@
   const panel = document.createElement("div");
   panel.className = "panel"; panel.id = "app-panel";
   if (anchor) anchor.after(panel);
+  // Siempre en Ajustes (engranaje), justo debajo de «Tus datos»
+  const aj = document.getElementById("v-ajustes"); if (aj && !aj.contains(panel)) aj.appendChild(panel);
   function renderPanel() {
     const st = pushState(), pr = A.P().push || {};
     const label = st === "granted" ? "activados" : st === "denied" ? "bloqueados (Ajustes del iPhone → Notificaciones → Miyagi)" : st === "unsupported" ? (isStandalone() ? "este dispositivo no los admite" : "instala la app para activarlos") : "desactivados";
