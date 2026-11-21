@@ -70,7 +70,7 @@ header .sub{color:#f0dcbc;font-size:12.5px;margin-top:4px}
 button,.btn{font:inherit;font-weight:700;border:1px solid var(--ink);background:var(--ink);color:var(--paper);border-radius:3px;padding:10px 14px;cursor:pointer}
 button.ghost{background:transparent;color:var(--ink)}
 button.small-btn{padding:6px 12px;font-size:13px;min-height:40px}
-.row:has(> input) > button,.row:has(> input) > .btn{align-self:stretch}
+.row:has(> input) > button,.row:has(> input) > .btn,.row:has(> input) > input{align-self:stretch}
 button:disabled{opacity:.5;cursor:default}
 button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--lacquer);outline-offset:2px}
 input,textarea,select{font:inherit;color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:3px;padding:9px 10px;width:100%;box-sizing:border-box}
@@ -564,7 +564,7 @@ header .gear:active{transform:scale(.9)}
   </div></div>
 
   <form class="ask-bar" id="ask-form">
-    <input id="ask-in" placeholder="Cuéntale a Miyagi: «he comido dos huevos y una tostada»" autocomplete="off" aria-label="Mensaje para Miyagi">
+    <input id="ask-in" placeholder="Cuéntale a Miyagi qué has comido" autocomplete="off" aria-label="Mensaje para Miyagi">
     <button type="submit" id="ask-send" aria-label="Enviar">→</button>
   </form>
   <div class="panel" id="ask-panel" hidden>
@@ -1035,7 +1035,7 @@ header .gear:active{transform:scale(.9)}
       <div class="msg mi"><span class="bt">Cuéntame lo que comes, lo que entrenas o lo que te pasa y lo apunto yo. También puedes preguntarme lo que quieras.</span></div>
     </div>
     <form id="chat-form" class="row" style="margin-top:12px">
-      <input id="chat-in" class="grow" placeholder="Ej.: he cenado pasta con atún, ¿voy bien?" autocomplete="off" aria-label="Mensaje">
+      <input id="chat-in" class="grow" placeholder="Ej.: ¿voy bien hoy?" autocomplete="off" aria-label="Mensaje">
       <button type="submit" id="chat-send">Enviar</button>
     </form>
     <div class="status" id="chat-status"></div>
